@@ -4,7 +4,7 @@
 use std::{
     cell::UnsafeCell,
     marker::PhantomData,
-    sync::{atomic, Arc},
+    sync::{atomic, mpsc, Arc},
     thread,
 };
 
@@ -26,4 +26,28 @@ struct Seat<T> {
     read: atomic::AtomicUsize,
     state: MutSeatState<T>,
     waiting: AtomicOption<thread::Thread>,
+}
+
+/// `BusInner` encapsulates data, which can be accessed by both the writers and readers.
+struct BusInner<T> {
+    ring: Vec<Seat<T>>,
+    len: usize,
+    tail: atomic::AtomicUsize,
+    closed: atomic::AtomicBool,
+}
+
+struct Bus<T> {
+    state: Arc<BusInner<T>>,
+
+    readers: usize,
+    rleft: Vec<usize>,
+
+    leaving: (mpsc::Sender<usize>, mpsc::Receiver<usize>),
+    waiting: (
+        mpsc::Sender<(thread::Thread, usize)>,
+        mpsc::Receiver<(thread::Thread, usize)>,
+    ),
+
+    unpark: mpsc::Sender<thread::Thread>,
+    cache: Vec<(thread::Thread, usize)>,
 }
