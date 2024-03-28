@@ -5,7 +5,7 @@ use std::{
     cell::UnsafeCell,
     marker::PhantomData,
     sync::{atomic, mpsc, Arc},
-    thread,
+    thread::{self, Thread},
 };
 
 /// Represents the state of a Seat in the circular buffer.
@@ -36,6 +36,7 @@ struct BusInner<T> {
     closed: atomic::AtomicBool,
 }
 
+/// `Bus` is the core data structure.
 struct Bus<T> {
     state: Arc<BusInner<T>>,
 
@@ -51,3 +52,15 @@ struct Bus<T> {
     unpark: mpsc::Sender<thread::Thread>,
     cache: Vec<(thread::Thread, usize)>,
 }
+
+pub struct BusReader<T> {
+    bus: Arc<BusInner<T>>,
+    head: usize,
+    leaving: (mpsc::Sender<usize>),
+    waiting: mpsc::Receiver<(Thread, usize)>,
+    closed: bool,
+}
+
+pub struct BusIter<'a, T>(&'a mut BusReader<T>);
+
+pub struct BusIntoIter<T>(BusReader<T>);
