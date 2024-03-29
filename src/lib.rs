@@ -1,11 +1,10 @@
 #![allow(unused)]
 #![allow(dead_code)]
 
+use std::fmt;
+use std::ops::Deref;
 use std::{
-    cell::UnsafeCell,
-    marker::PhantomData,
-    sync::{atomic, mpsc, Arc},
-    thread::{self, Thread},
+    cell::UnsafeCell, fmt::Debug, marker::PhantomData, sync::{atomic, mpsc, Arc}, thread::{self, Thread}
 };
 
 /// Represents the state of a Seat in the circular buffer.
@@ -15,6 +14,22 @@ struct SeatState<T> {
 }
 
 struct MutSeatState<T>(UnsafeCell<SeatState<T>>);
+
+unsafe impl<T> Sync for MutSeatState<T> {}
+
+impl<T> Deref for MutSeatState<T> {
+    type Target = UnsafeCell<SeatState<T>>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+    
+}
+
+impl<T> fmt::Debug for MutSeatState<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("MutSeatState").field(&self.0).finish()
+    }
+}
 
 struct AtomicOption<T> {
     ptr: atomic::AtomicPtr<T>,
@@ -55,6 +70,10 @@ struct Bus<T> {
     unpark: mpsc::Sender<thread::Thread>,
     // caching to keep track of threads waiting for the next write.
     cache: Vec<(thread::Thread, usize)>,
+}
+
+impl<T> Bus<T> {
+    pub fn new(len: usize) -> RES
 }
 
 /// a receiver of messages from the bus.
