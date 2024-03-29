@@ -39,23 +39,30 @@ struct BusInner<T> {
 /// `Bus` is the core data structure.
 struct Bus<T> {
     state: Arc<BusInner<T>>,
-
+    // current number of readers.
     readers: usize,
+    // tracks readers that should be skipped for each index.
     rleft: Vec<usize>,
-
+    // used by receivers to signal when they are done.
     leaving: (mpsc::Sender<usize>, mpsc::Receiver<usize>),
+    // used by receivers to signal when they're wating for new entries
     waiting: (
         mpsc::Sender<(thread::Thread, usize)>,
         mpsc::Receiver<(thread::Thread, usize)>,
     ),
-
+    // channel used to communicate to unparker that a given
+    // thread should be woken up.
     unpark: mpsc::Sender<thread::Thread>,
+    // caching to keep track of threads waiting for the next write.
     cache: Vec<(thread::Thread, usize)>,
 }
 
+/// a receiver of messages from the bus.
 pub struct BusReader<T> {
     bus: Arc<BusInner<T>>,
+    // head points to the current position in the bus.
     head: usize,
+    // `leaving` always used to signal when reader is done.
     leaving: (mpsc::Sender<usize>),
     waiting: mpsc::Receiver<(Thread, usize)>,
     closed: bool,
