@@ -2,12 +2,14 @@
 #![allow(dead_code)]
 #![allow(dropping_references)]
 
+use crossbeam_channel as mpsc;
+use parking_lot_core::SpinWait;
 use std::ops::Deref;
 use std::{
     cell::UnsafeCell,
     fmt::Debug,
     marker::PhantomData,
-    sync::{atomic, mpsc, Arc},
+    sync::{atomic, mpsc as std_mpsc, Arc},
     thread::{self, Thread},
 };
 use std::{fmt, ptr};
