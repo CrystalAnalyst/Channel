@@ -153,10 +153,15 @@ impl<T: Clone + Sync> Seat<T> {
 
 /// `BusInner` encapsulates data, which can be accessed by both the writers and readers.
 struct BusInner<T> {
+    /*------Ring buffer--------*/
     ring: Vec<Seat<T>>,
     len: usize,
-    tail: atomic::AtomicUsize,
-    closed: atomic::AtomicBool,
+
+    /*-----Pos Tracking--------*/
+    tail: atomic::AtomicUsize, // Indicate the index where the nxt write will occur.
+
+    /*----State Management-----*/
+    closed: atomic::AtomicBool, // the state of the Bus.
 }
 
 impl<T> Debug for BusInner<T> {
