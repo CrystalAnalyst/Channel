@@ -157,6 +157,17 @@ struct BusInner<T> {
     closed: atomic::AtomicBool,
 }
 
+impl<T> Debug for BusInner<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BusInner")
+            .field("ring", &self.ring)
+            .field("len", &self.len)
+            .field("tail", &self.tail)
+            .field("closed", &self.closed)
+            .finish()
+    }
+}
+
 /// `Bus` is the core data structure.
 struct Bus<T> {
     state: Arc<BusInner<T>>,
