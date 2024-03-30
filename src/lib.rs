@@ -1,5 +1,6 @@
 #![allow(unused)]
 #![allow(dead_code)]
+#![allow(dropping_references)]
 
 use std::ops::Deref;
 use std::{
@@ -120,6 +121,31 @@ impl<T> Default for Seat<T> {
             waiting: AtomicOption::empty(),
             state: MutSeatState(UnsafeCell::new(SeatState { max: 0, val: None })),
         }
+    }
+}
+
+impl<T: Clone + Sync> Seat<T> {
+    fn take(&self) -> T {
+        // read the state and validate the current readerCount.
+        let read = self.read.load(atomic::Ordering::Acquire);
+        let state = unsafe { &*self.state.get() };
+        assert!(read < state.max, " the number of readers exceeds!");
+        // value extraction and notification(to the writers)
+        let mut waiting = None;
+        let v = if read + 1 == state.max {
+            waiting = self.waiting.take();
+            unsafe { &mut *self.state.get() }.val.take().unwrap()
+        } else {
+            let v = state.val.clone().expect("there should be value but not!");
+            drop(state);
+            v
+        };
+        // increment the count and writer notify
+        self.read.fetch_add(1, atomic::Ordering::AcqRel);
+        if let Some(t) = waiting {
+            t.unpark();
+        }
+        v
     }
 }
 
