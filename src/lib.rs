@@ -103,6 +103,26 @@ struct Seat<T> {
     waiting: AtomicOption<thread::Thread>,
 }
 
+impl<T> fmt::Debug for Seat<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Seat")
+            .field("read", &self.read)
+            .field("state", &self.state)
+            .field("wating", &self.waiting)
+            .finish()
+    }
+}
+
+impl<T> Default for Seat<T> {
+    fn default() -> Self {
+        Seat {
+            read: atomic::AtomicUsize::new(0),
+            waiting: AtomicOption::empty(),
+            state: MutSeatState(UnsafeCell::new(SeatState { max: 0, val: None })),
+        }
+    }
+}
+
 /// `BusInner` encapsulates data, which can be accessed by both the writers and readers.
 struct BusInner<T> {
     ring: Vec<Seat<T>>,
