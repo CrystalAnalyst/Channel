@@ -172,36 +172,35 @@ impl<T> Debug for BusInner<T> {
 
 /// `Bus` is the core data structure.
 struct Bus<T> {
-    state: Arc<BusInner<T>>,
-    // current number of readers.
-    readers: usize,
-    // tracks readers that should be skipped for each index.
-    rleft: Vec<usize>,
-    // used by receivers to signal when they are done.
-    leaving: (mpsc::Sender<usize>, mpsc::Receiver<usize>),
-    // used by receivers to signal when they're wating for new entries
+    /*-------------Core State Management-----------*/
+    state: Arc<BusInner<T>>, // holds the inner state of the bus, including the data being transmitted.
+
+    /*-------------Reader Management---------------*/
+    readers: usize,    // Number of current Active readers.
+    rleft: Vec<usize>, // tracks readers that should be skipped for each index.
+    leaving: (mpsc::Sender<usize>, mpsc::Receiver<usize>), // used by receivers to signal when they are done.
     waiting: (
         mpsc::Sender<(thread::Thread, usize)>,
         mpsc::Receiver<(thread::Thread, usize)>,
-    ),
-    // channel used to communicate to unparker that a given
-    // thread should be woken up.
-    unpark: mpsc::Sender<thread::Thread>,
-    // caching to keep track of threads waiting for the next write.
-    cache: Vec<(thread::Thread, usize)>,
+    ), // used by receivers to signal when they're wating for new entries
+    unpark: mpsc::Sender<thread::Thread>, // Send to unparker to wake up parking threads.
+    cache: Vec<(thread::Thread, usize)>, // caching to keep track of threads waiting for the next write.
 }
 
 impl<T> Bus<T> {}
 
 /// a receiver of messages from the bus.
 pub struct BusReader<T> {
-    bus: Arc<BusInner<T>>,
-    // head points to the current position in the bus.
-    head: usize,
-    // `leaving` always used to signal when reader is done.
+    /*-------------Core State Management-----------*/
+    bus: Arc<BusInner<T>>, // holds a reference to the inner state of the bus that the reader is reading from.
+
+    /*---------Reader Position and Status----------*/
+    head: usize,  // points to the next position to be read.
+    closed: bool, // indicates whether the reader has been closed.
+
+    /*---------Signaling and Communication-------- */
     leaving: (mpsc::Sender<usize>),
     waiting: mpsc::Receiver<(Thread, usize)>,
-    closed: bool,
 }
 
 pub struct BusIter<'a, T>(&'a mut BusReader<T>);
