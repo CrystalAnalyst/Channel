@@ -1,7 +1,6 @@
 #![allow(unused)]
 #![allow(dead_code)]
 
-use std::fmt;
 use std::ops::Deref;
 use std::{
     cell::UnsafeCell,
@@ -10,6 +9,7 @@ use std::{
     sync::{atomic, mpsc, Arc},
     thread::{self, Thread},
 };
+use std::{fmt, ptr};
 
 /// Represents the state of a Seat in the circular buffer.
 struct SeatState<T> {
@@ -35,7 +35,13 @@ impl<T> fmt::Debug for MutSeatState<T> {
 }
 
 struct AtomicOption<T> {
+    /// A raw pointer type which can be safely shared between threads.
+    /// This type has the same in-memory representation as a *mut T.
     ptr: atomic::AtomicPtr<T>,
+    /// Adding a PhantomData<T> field to your type tells the compiler
+    /// that your type acts as though it stores a value of type T,
+    /// even though it doesn't really.
+    /// This information is used when computing certain safety properties.
     _marker: PhantomData<Option<Box<T>>>,
 }
 
@@ -47,10 +53,48 @@ impl<T> fmt::Debug for AtomicOption<T> {
     }
 }
 
+impl<T> Drop for AtomicOption<T> {
+    fn drop(&mut self) {
+        todo!()
+    }
+}
+
 // consider AtomicOption<T> is `Send` as long as the type `T` can be `Send`.
 unsafe impl<T: Send> Send for AtomicOption<T> {}
 // consider AtomicOption<T> is `Sync` as long as the type `T` can be `Sync`.
 unsafe impl<T: Sync> Sync for AtomicOption<T> {}
+
+impl<T> AtomicOption<T> {
+    /// create an empty instance of AtomicOption.
+    fn empty() -> Self {
+        Self {
+            ptr: atomic::AtomicPtr::new(ptr::null_mut()),
+            _marker: PhantomData,
+        }
+    }
+
+    /// swaps the value stored in the `AtomicPtr<T>`
+    /// with a new value and returns the old value.
+    fn swap(&self, val: Option<Box<T>>) -> Option<Box<T>> {
+        // If the val is Some(), swaps the boxed value into the ptr.
+        // else, swaps a null pointer into the ptr.
+        let old = match val {
+            Some(val) => self.ptr.swap(Box::into_raw(val), atomic::Ordering::AcqRel),
+            None => self.ptr.swap(ptr::null_mut(), atomic::Ordering::Acquire),
+        };
+        if old.is_null() {
+            None
+        } else {
+            Some(unsafe { Box::from_raw(old) })
+        }
+    }
+
+    /// swap with param:`None`, which means
+    /// just return the value stored in the AtomicPtr<T>.
+    fn take(&self) -> Option<Box<T>> {
+        self.swap(None)
+    }
+}
 
 /// A seat represents a single location in the circurlar buffer.
 struct Seat<T> {
