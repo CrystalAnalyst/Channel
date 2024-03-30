@@ -4,7 +4,11 @@
 use std::fmt;
 use std::ops::Deref;
 use std::{
-    cell::UnsafeCell, fmt::Debug, marker::PhantomData, sync::{atomic, mpsc, Arc}, thread::{self, Thread}
+    cell::UnsafeCell,
+    fmt::Debug,
+    marker::PhantomData,
+    sync::{atomic, mpsc, Arc},
+    thread::{self, Thread},
 };
 
 /// Represents the state of a Seat in the circular buffer.
@@ -22,7 +26,6 @@ impl<T> Deref for MutSeatState<T> {
     fn deref(&self) -> &Self::Target {
         &self.0
     }
-    
 }
 
 impl<T> fmt::Debug for MutSeatState<T> {
@@ -35,6 +38,19 @@ struct AtomicOption<T> {
     ptr: atomic::AtomicPtr<T>,
     _marker: PhantomData<Option<Box<T>>>,
 }
+
+impl<T> fmt::Debug for AtomicOption<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AtomicOption")
+            .field("ptr", &self.ptr)
+            .finish()
+    }
+}
+
+// consider AtomicOption<T> is `Send` as long as the type `T` can be `Send`.
+unsafe impl<T: Send> Send for AtomicOption<T> {}
+// consider AtomicOption<T> is `Sync` as long as the type `T` can be `Sync`.
+unsafe impl<T: Sync> Sync for AtomicOption<T> {}
 
 /// A seat represents a single location in the circurlar buffer.
 struct Seat<T> {
@@ -72,9 +88,7 @@ struct Bus<T> {
     cache: Vec<(thread::Thread, usize)>,
 }
 
-impl<T> Bus<T> {
-    pub fn new(len: usize) -> RES
-}
+impl<T> Bus<T> {}
 
 /// a receiver of messages from the bus.
 pub struct BusReader<T> {
