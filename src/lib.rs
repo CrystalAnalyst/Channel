@@ -55,7 +55,7 @@ impl<T> fmt::Debug for AtomicOption<T> {
 
 impl<T> Drop for AtomicOption<T> {
     fn drop(&mut self) {
-        todo!()
+        self.take();
     }
 }
 
