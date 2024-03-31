@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 #![allow(dropping_references)]
 
+use core::time;
 use crossbeam_channel as mpsc;
 use parking_lot_core::SpinWait;
 use std::ops::Deref;
@@ -14,6 +15,8 @@ use std::{
     thread::{self, Thread},
 };
 use std::{fmt, ptr};
+
+const SPINTIME: usize = 100_000; // ns
 
 /// Represents the state of a Seat in the circular buffer.
 struct SeatState<T> {
@@ -243,6 +246,18 @@ impl<T> Bus<T> {
 
     /* ---------------BroadCast Interface---------------- */
     fn broadcast_inner(&mut self, val: T, block: bool) -> Result<(), T> {
+        // 1. Initializatio and Set up
+        let tail = self.state.tail.load(atomic::Ordering::Relaxed);
+        let fence = (tail + 1) % self.state.len;
+        let spintime = time::Duration::new(0, SPINTIME);
+        let mut sw = SpinWait::new();
+        // 2. Main Loop
+        // 3. Handle Blocking
+        // 4. Error Handling
+        // 5. Writing to the Bus
+        // 6. Updating Tail Pointer
+        // 7. Unblocking Receivers
+
         todo!()
     }
 
