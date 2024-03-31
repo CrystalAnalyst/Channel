@@ -197,7 +197,7 @@ impl<T> Bus<T> {
     pub fn new(mut len: usize) -> Bus<T> {
         use std::iter;
 
-        // ring buffer must have room for one padding element.
+        // Set Inner state, ring buffer must have room for one padding element.
         len += 1;
         let inner = Arc::new(BusInner {
             ring: (0..len).map(|_| Seat::default()).collect(),
@@ -206,16 +206,19 @@ impl<T> Bus<T> {
             len,
         });
 
-
+        // unparking threads Asynchrounously.
         let (unpark_tx, unpark_rx) = mpsc::unbounded::<thread::Thread>();
         let _ = thread::Builder::new()
             .name("bus_unparking".to_owned())
             .spawn(move || {
+                // listens for unpark requests on the receiver channel (unpark_rx)
+                // and unparks the corresponding threads
                 for t in unpark_rx.iter() {
                     t.unpark();
                 }
             });
 
+        // return the Assembling of all the components.
         Bus {
             state: inner,
             readers: 0,
