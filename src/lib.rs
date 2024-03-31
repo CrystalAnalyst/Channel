@@ -230,9 +230,15 @@ impl<T> Bus<T> {
         }
     }
 
+    /// get the expected number of reads for the given seat(at)
     #[inline]
     fn expect(&mut self, at: usize) -> usize {
-        todo!()
+        // get the Max number of expected reads for given seat.
+        let max_reads = unsafe { &*self.state.ring[at].state.get() }.max;
+        // substract the number of reads that should be skipped.
+        let adjusted_reads = max_reads - self.rleft[at];
+        
+        adjusted_reads
     }
 
     /* ---------------BroadCast Interface---------------- */
