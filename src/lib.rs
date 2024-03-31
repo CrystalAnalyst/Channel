@@ -192,7 +192,38 @@ struct Bus<T> {
     cache: Vec<(thread::Thread, usize)>, // caching to keep track of threads waiting for the next write.
 }
 
-impl<T> Bus<T> {}
+impl<T> Bus<T> {
+    pub fn new(mut len: usize) -> Bus<T> {
+        todo!()
+    }
+
+    #[inline]
+    fn expect(&mut self, at: usize) -> usize {
+        todo!()
+    }
+
+    /* ---------------BroadCast Interface---------------- */
+    fn broadcast_inner(&mut self, val: T, block: bool) -> Result<(), T> {
+        todo!()
+    }
+
+    pub fn try_broadcast(&mut self, val: T) -> Result<(), T> {
+        todo!()
+    }
+
+    pub fn broadcast(&mut self, val: T) {
+        todo!()
+    }
+
+    /* -----------Consumer(Reciver) Management------------- */
+    pub fn add_rx(&mut self) -> BusReader<T> {
+        todo!()
+    }
+
+    pub fn rx_count(&self) -> usize {
+        todo!()
+    }
+}
 
 /// a receiver of messages from the bus.
 pub struct BusReader<T> {
