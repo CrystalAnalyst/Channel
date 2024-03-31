@@ -5,6 +5,7 @@
 use crossbeam_channel as mpsc;
 use parking_lot_core::SpinWait;
 use std::ops::Deref;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::{
     cell::UnsafeCell,
     fmt::Debug,
@@ -194,7 +195,36 @@ struct Bus<T> {
 
 impl<T> Bus<T> {
     pub fn new(mut len: usize) -> Bus<T> {
-        todo!()
+        use std::iter;
+
+        // ring buffer must have room for one padding element.
+        len += 1;
+        let inner = Arc::new(BusInner {
+            ring: (0..len).map(|_| Seat::default()).collect(),
+            tail: AtomicUsize::new(0),
+            closed: AtomicBool::new(false),
+            len,
+        });
+
+
+        let (unpark_tx, unpark_rx) = mpsc::unbounded::<thread::Thread>();
+        let _ = thread::Builder::new()
+            .name("bus_unparking".to_owned())
+            .spawn(move || {
+                for t in unpark_rx.iter() {
+                    t.unpark();
+                }
+            });
+
+        Bus {
+            state: inner,
+            readers: 0,
+            rleft: iter::repeat(0).take(len).collect(),
+            leaving: mpsc::unbounded(),
+            waiting: mpsc::unbounded(),
+            unpark: unpark_tx,
+            cache: Vec::new(),
+        }
     }
 
     #[inline]
