@@ -237,7 +237,7 @@ impl<T> Bus<T> {
         let max_reads = unsafe { &*self.state.ring[at].state.get() }.max;
         // substract the number of reads that should be skipped.
         let adjusted_reads = max_reads - self.rleft[at];
-        
+
         adjusted_reads
     }
 
@@ -256,11 +256,18 @@ impl<T> Bus<T> {
 
     /* -----------Consumer(Reciver) Management------------- */
     pub fn add_rx(&mut self) -> BusReader<T> {
-        todo!()
+        self.readers += 1;
+        BusReader {
+            bus: Arc::clone(&self.state),
+            head: self.state.tail.load(atomic::Ordering::Relaxed),
+            leaving: self.leaving.0.clone(),
+            waiting: self.waiting.0.clone(),
+            closed: false,
+        }
     }
 
     pub fn rx_count(&self) -> usize {
-        todo!()
+        self.readers - self.leaving.1.len()
     }
 }
 
@@ -275,7 +282,7 @@ pub struct BusReader<T> {
 
     /*---------Signaling and Communication-------- */
     leaving: (mpsc::Sender<usize>),
-    waiting: mpsc::Receiver<(Thread, usize)>,
+    waiting: mpsc::Sender<(Thread, usize)>,
 }
 
 pub struct BusIter<'a, T>(&'a mut BusReader<T>);
