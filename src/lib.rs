@@ -252,7 +252,7 @@ impl<T> Bus<T> {
         let fence = (tail + 1) % self.state.len;
         let spintime = time::Duration::new(0, SPINTIME);
         let mut sw = SpinWait::new();
-        // 2. Main Loop
+        // 2. Main Loop for preparing the necessity before writing.
         loop {
             let fence_read = self.state.ring[fence].read.load(atomic::Ordering::Acquire);
             if fence_read == self.expect(fence) {
@@ -293,17 +293,18 @@ impl<T> Bus<T> {
             let state = unsafe { &mut *next.state.get() };
             state.max = readers;
             state.val = Some(val);
-            // clear the `waiting` field of the `next` seat,
+            // here are the new value, so clean the `waiting` field of the `next` seat,
             // ensures that any parked threads with the seat are unblocked.
             next.waiting.take();
             // resets the `read` counter of the `next` to 0.
-            // ensure they can accurately determone when they have consumed the value by the writer.
+            // ensure they can accurately determine when they have consumed the value by the writer.
             next.read.store(0, atomic::Ordering::Release);
         }
         // 6. Unblocks waiting threads after Broadcast operation.
         while let Ok((t, at)) = self.waiting.1.try_recv() {
             if at == tail {
                 // threads waiting for the current tail index are being added to a chche.
+                // because these threads are waiting for the *next* broadcast.
                 self.cache.push((t, at));
             } else {
                 // others are sent an unpark signal.
