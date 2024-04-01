@@ -360,11 +360,32 @@ pub struct BusReader<T> {
     waiting: mpsc::Sender<(Thread, usize)>,
 }
 
+#[derive(Clone, Copy)]
+pub enum RecvCondition {
+    Try,
+    Block,
+    Timeout(time::Duration),
+}
+
 impl<T: Clone + Debug> BusReader<T> {
-    fn recv_inner() {}
-    pub fn try_recv() {}
-    pub fn recv() {}
-    pub fn recv_timeout() {}
+    fn recv_inner(&mut self, block: RecvCondition) -> Result<T, std_mpsc::RecvTimeoutError> {
+        todo!()
+    }
+
+    pub fn try_recv(&mut self) -> Result<T, std_mpsc::TryRecvError> {
+        todo!()
+    }
+
+    pub fn recv(&mut self) -> Result<T, std_mpsc::RecvError> {
+        todo!()
+    }
+
+    pub fn recv_timeout(
+        &mut self,
+        timeout: time::Duration,
+    ) -> Result<T, std_mpsc::RecvTimeoutError> {
+        todo!()
+    }
 }
 
 pub struct BusIter<'a, T>(&'a mut BusReader<T>);
