@@ -5,6 +5,7 @@
 use core::time;
 use crossbeam_channel as mpsc;
 use parking_lot_core::SpinWait;
+use std::f32::MIN_EXP;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::{
@@ -16,7 +17,7 @@ use std::{
 };
 use std::{fmt, ptr};
 
-const SPINTIME: usize = 100_000; // ns
+const SPINTIME: u32 = 100_000; // ns
 
 /// Represents the state of a Seat in the circular buffer.
 struct SeatState<T> {
@@ -252,13 +253,63 @@ impl<T> Bus<T> {
         let spintime = time::Duration::new(0, SPINTIME);
         let mut sw = SpinWait::new();
         // 2. Main Loop
-        // 3. Handle Blocking
-        // 4. Error Handling
-        // 5. Writing to the Bus
-        // 6. Updating Tail Pointer
-        // 7. Unblocking Receivers
+        loop {
+            let fence_read = self.state.ring[fence].read.load(atomic::Ordering::Acquire);
+            if fence_read == self.expect(fence) {
+                break;
+            }
 
-        todo!()
+            while let Ok(mut left) = self.leaving.1.try_recv() {
+                self.readers -= 1;
+                while left != tail {
+                    self.rleft[left] += 1;
+                    left = (left + 1) % self.state.len;
+                }
+            }
+
+            if fence_read == self.expect(fence) {
+                break;
+            } else if block {
+                // 3. Handle Blocking
+                self.state.ring[fence]
+                    .waiting
+                    .swap(Some(Box::new(thread::current())));
+                self.state.ring[fence]
+                    .read
+                    .fetch_add(0, atomic::Ordering::Release);
+                if !sw.spin() {
+                    thread::park_timeout(spintime);
+                }
+                continue;
+            } else {
+                // 4. Error Handling
+                return Err(val);
+            }
+        }
+        // 5. Writing to the Bus
+        let readers = self.readers;
+        {
+            let next = &self.state.ring[tail];
+            let state = unsafe { &mut *next.state.get() };
+            state.max = readers;
+            state.val = Some(val);
+            next.waiting.take();
+            next.read.store(0, atomic::Ordering::Release);
+        }
+        // 6. Updating Tail Pointer
+        while let Ok((t, at)) = self.waiting.1.try_recv() {
+            if at == tail {
+                self.cache.push((t, at));
+            } else {
+                self.unpark.send(t).unwrap();
+            }
+        }
+        // 7. Unblocking Receivers
+        for w in self.cache.drain(..) {
+            self.waiting.0.send(w).unwrap();
+        }
+
+        Ok(())
     }
 
     pub fn try_broadcast(&mut self, val: T) -> Result<(), T> {
