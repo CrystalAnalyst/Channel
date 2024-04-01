@@ -360,6 +360,13 @@ pub struct BusReader<T> {
     waiting: mpsc::Sender<(Thread, usize)>,
 }
 
+impl<T: Clone + Debug> BusReader<T> {
+    fn recv_inner() {}
+    pub fn try_recv() {}
+    pub fn recv() {}
+    pub fn recv_timeout() {}
+}
+
 pub struct BusIter<'a, T>(&'a mut BusReader<T>);
 
 pub struct BusIntoIter<T>(BusReader<T>);
