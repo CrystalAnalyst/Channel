@@ -372,14 +372,17 @@ impl<T: Clone + Debug> BusReader<T> {
         todo!()
     }
 
+    /// Non-blocking Interface for BusReader to receive a value
     pub fn try_recv(&mut self) -> Result<T, std_mpsc::TryRecvError> {
         todo!()
     }
 
+    /// Blocking Interface for BusReader to receive a value.
     pub fn recv(&mut self) -> Result<T, std_mpsc::RecvError> {
         todo!()
     }
 
+    /// Time bound receive.
     pub fn recv_timeout(
         &mut self,
         timeout: time::Duration,
