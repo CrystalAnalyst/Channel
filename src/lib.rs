@@ -8,6 +8,7 @@ use parking_lot_core::SpinWait;
 use std::f32::MIN_EXP;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::time::Instant;
 use std::{
     cell::UnsafeCell,
     fmt::Debug,
@@ -367,9 +368,27 @@ pub enum RecvCondition {
     Timeout(time::Duration),
 }
 
-impl<T: Clone + Debug> BusReader<T> {
+impl<T: Clone + Sync> BusReader<T> {
     fn recv_inner(&mut self, block: RecvCondition) -> Result<T, std_mpsc::RecvTimeoutError> {
-        todo!()
+        if self.closed {
+            return Err(std_mpsc::RecvTimeoutError::Disconnected);
+        }
+
+        let start = match block {
+            RecvCondition::Timeout(_) => Some(Instant::now()),
+            _ => None,
+        };
+        let spintime = time::Duration::new(0, SPINTIME);
+        let mut was_closed = false;
+        let mut sw = SpinWait::new();
+        let mut first = false;
+        loop {
+            todo!()
+        }
+        let head = self.head;
+        let ret = self.bus.ring[head].take();
+        self.head = (head + 1) % self.bus.len;
+        Ok(ret)
     }
 
     /// Non-blocking Interface for BusReader to receive a value
