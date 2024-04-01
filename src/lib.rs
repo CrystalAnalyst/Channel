@@ -293,18 +293,24 @@ impl<T> Bus<T> {
             let state = unsafe { &mut *next.state.get() };
             state.max = readers;
             state.val = Some(val);
+            // clear the `waiting` field of the `next` seat,
+            // ensures that any parked threads with the seat are unblocked.
             next.waiting.take();
+            // resets the `read` counter of the `next` to 0.
+            // ensure they can accurately determone when they have consumed the value by the writer.
             next.read.store(0, atomic::Ordering::Release);
         }
-        // 6. Updating Tail Pointer
+        // 6. Unblocks waiting threads after Broadcast operation.
         while let Ok((t, at)) = self.waiting.1.try_recv() {
             if at == tail {
+                // threads waiting for the current tail index are being added to a chche.
                 self.cache.push((t, at));
             } else {
+                // others are sent an unpark signal.
                 self.unpark.send(t).unwrap();
             }
         }
-        // 7. Unblocking Receivers
+        // all waiting threads are notified accordingly.
         for w in self.cache.drain(..) {
             self.waiting.0.send(w).unwrap();
         }
