@@ -319,11 +319,13 @@ impl<T> Bus<T> {
     }
 
     pub fn try_broadcast(&mut self, val: T) -> Result<(), T> {
-        todo!()
+        self.broadcast_inner(val, false)
     }
 
     pub fn broadcast(&mut self, val: T) {
-        todo!()
+        if let Err(_) = self.broadcast_inner(val, true) {
+            unreachable!("broadcast without Blocking Cannot Fail!");
+        }
     }
 
     /* -----------Consumer(Reciver) Management------------- */
