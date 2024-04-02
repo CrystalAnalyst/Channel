@@ -481,6 +481,12 @@ impl<T: Clone + Sync> BusReader<T> {
     }
 }
 
+impl<T> Drop for BusReader<T> {
+    fn drop(&mut self) {
+        self.leaving.send(self.head);
+    }
+}
+
 impl<'a, T: Clone + Sync> IntoIterator for &'a mut BusReader<T> {
     type Item = T;
     type IntoIter = BusIter<'a, T>;
