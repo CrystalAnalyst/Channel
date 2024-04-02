@@ -401,7 +401,7 @@ impl<T: Clone + Sync> BusReader<T> {
         let spintime = time::Duration::new(0, SPINTIME);
         let mut was_closed = false;
         let mut sw = SpinWait::new();
-        let mut first = false;
+        let mut first = true;
         loop {
             let tail = self.bus.tail.load(atomic::Ordering::Acquire);
             if tail != self.head {
@@ -429,7 +429,6 @@ impl<T: Clone + Sync> BusReader<T> {
                 }
                 first = false;
             }
-
             if !sw.spin() {
                 match block {
                     RecvCondition::Timeout(t) => {
