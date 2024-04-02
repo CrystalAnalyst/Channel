@@ -4,6 +4,7 @@
 
 use core::time;
 use crossbeam_channel as mpsc;
+use mpsc::RecvTimeoutError;
 use parking_lot_core::SpinWait;
 use std::f32::MIN_EXP;
 use std::ops::Deref;
@@ -437,12 +438,19 @@ impl<T: Clone + Sync> BusReader<T> {
 
     /// Non-blocking Interface for BusReader to receive a value
     pub fn try_recv(&mut self) -> Result<T, std_mpsc::TryRecvError> {
-        todo!()
+        self.recv_inner(RecvCondition::Try).map_err(|e| match e {
+            std_mpsc::RecvTimeoutError::Timeout => std_mpsc::TryRecvError::Empty,
+            std_mpsc::RecvTimeoutError::Disconnected => std_mpsc::TryRecvError::Disconnected,
+        })
     }
 
     /// Blocking Interface for BusReader to receive a value.
     pub fn recv(&mut self) -> Result<T, std_mpsc::RecvError> {
-        todo!()
+        match self.recv_inner(RecvCondition::Block) {
+            Ok(v) => return Ok(v),
+            Err(std_mpsc::RecvTimeoutError::Disconnected) => Err(std_mpsc::RecvError),
+            _ => unreachable!("Blocking recv cannot fail!"),
+        }
     }
 
     /// Time bound receive.
@@ -450,7 +458,7 @@ impl<T: Clone + Sync> BusReader<T> {
         &mut self,
         timeout: time::Duration,
     ) -> Result<T, std_mpsc::RecvTimeoutError> {
-        todo!()
+        self.recv_inner(RecvCondition::Timeout(timeout))
     }
 }
 
