@@ -464,4 +464,19 @@ impl<T: Clone + Sync> BusReader<T> {
 
 pub struct BusIter<'a, T>(&'a mut BusReader<T>);
 
+impl<'a, T: Clone + Sync> Iterator for BusIter<'a, T> {
+    type Item = T;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.recv().ok()
+    }
+}
+
+
 pub struct BusIntoIter<T>(BusReader<T>);
+
+impl<T: Clone + Sync> Iterator for BusIntoIter<T> {
+    type Item = T;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.recv().ok()
+    }
+}
