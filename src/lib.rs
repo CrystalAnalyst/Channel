@@ -362,6 +362,18 @@ pub struct BusReader<T> {
     waiting: mpsc::Sender<(Thread, usize)>,
 }
 
+impl<T> Debug for BusReader<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BusReader")
+            .field("bus", &self.bus)
+            .field("head", &self.head)
+            .field("closed", &self.closed)
+            .field("leaving", &self.leaving)
+            .field("waiting", &self.waiting)
+            .finish()
+    }
+}
+
 #[derive(Clone, Copy)]
 pub enum RecvCondition {
     Try,
