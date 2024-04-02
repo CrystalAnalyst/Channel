@@ -348,6 +348,13 @@ impl<T> Bus<T> {
     }
 }
 
+impl<T> Drop for Bus<T> {
+    fn drop(&mut self) {
+        self.state.closed.store(true, atomic::Ordering::Relaxed);
+        self.state.tail.fetch_add(0, atomic::Ordering::AcqRel);
+    }
+}
+
 /// a receiver of messages from the bus.
 pub struct BusReader<T> {
     /*-------------Core State Management-----------*/
