@@ -462,6 +462,22 @@ impl<T: Clone + Sync> BusReader<T> {
     }
 }
 
+impl<'a, T: Clone + Sync> IntoIterator for &'a mut BusReader<T> {
+    type Item = T;
+    type IntoIter = BusIter<'a, T>;
+    fn into_iter(self) -> Self::IntoIter {
+        BusIter(self)
+    }
+}
+
+impl<T: Clone + Sync> IntoIterator for BusReader<T> {
+    type Item = T;
+    type IntoIter = BusIntoIter<T>;
+    fn into_iter(self) -> Self::IntoIter {
+        BusIntoIter(self)
+    }
+}
+
 pub struct BusIter<'a, T>(&'a mut BusReader<T>);
 
 impl<'a, T: Clone + Sync> Iterator for BusIter<'a, T> {
@@ -470,7 +486,6 @@ impl<'a, T: Clone + Sync> Iterator for BusIter<'a, T> {
         self.0.recv().ok()
     }
 }
-
 
 pub struct BusIntoIter<T>(BusReader<T>);
 
