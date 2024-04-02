@@ -383,7 +383,51 @@ impl<T: Clone + Sync> BusReader<T> {
         let mut sw = SpinWait::new();
         let mut first = false;
         loop {
-            todo!()
+            let tail = self.bus.tail.load(atomic::Ordering::Acquire);
+            if tail != self.head {
+                break;
+            }
+            // Empty and closed.
+            if self.bus.closed.load(atomic::Ordering::Relaxed) {
+                if !was_closed {
+                    was_closed = true;
+                    continue;
+                }
+                self.closed = true;
+                return Err(std_mpsc::RecvTimeoutError::Disconnected);
+            }
+            // Empty but not closed (if nonblocking return Timeout).
+            if let RecvCondition::Try = block {
+                return Err(std_mpsc::RecvTimeoutError::Timeout);
+            }
+            // Empty but not closed, and Blocking (wait until there's data to read)
+            // park and tell writer to notify on write.
+            if first {
+                if let Err(..) = self.waiting.send((thread::current(), self.head)) {
+                    atomic::fence(atomic::Ordering::SeqCst);
+                    continue;
+                }
+                first = false;
+            }
+
+            if !sw.spin() {
+                match block {
+                    RecvCondition::Timeout(t) => {
+                        match t.checked_sub(start.as_ref().unwrap().elapsed()) {
+                            Some(left) => {
+                                if left < spintime {
+                                    thread::park_timeout(left);
+                                } else {
+                                    thread::park_timeout(spintime);
+                                }
+                            }
+                            None => return Err(std_mpsc::RecvTimeoutError::Timeout),
+                        }
+                    }
+                    RecvCondition::Block => thread::park_timeout(spintime),
+                    RecvCondition::Try => unreachable!(),
+                }
+            }
         }
         let head = self.head;
         let ret = self.bus.ring[head].take();
