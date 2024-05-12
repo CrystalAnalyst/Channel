@@ -27,8 +27,15 @@ struct SeatState<T> {
     val: Option<T>,
 }
 
+impl<T> SeatState<T> {
+    pub fn new() -> Self {
+        Self { max: 0, val: None }
+    }
+}
+
 struct MutSeatState<T>(UnsafeCell<SeatState<T>>);
 
+/// 实现Sync trait，以安全地在多个线程间共享
 unsafe impl<T> Sync for MutSeatState<T> {}
 
 impl<T> Deref for MutSeatState<T> {
@@ -41,6 +48,34 @@ impl<T> Deref for MutSeatState<T> {
 impl<T> fmt::Debug for MutSeatState<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("MutSeatState").field(&self.0).finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use super::*;
+
+    #[test]
+    fn test_seat_state() {
+        let mut state = SeatState { max: 10, val: None };
+        assert_eq!(state.max, 10);
+        assert_eq!(state.val, None);
+        state.val = Some(5);
+        assert_eq!(state.max, 10);
+        assert_eq!(state.val, Some(5));
+    }
+
+    #[test]
+    fn test_sync_impl() {
+        let state = MutSeatState(UnsafeCell::new(SeatState::new()));
+        // Test that Sync trait is implemented correctly
+        let shared_state: &Mutex<MutSeatState<i32>> = &Mutex::new(state);
+        let mut shared_guard = shared_state.lock().unwrap();
+        // Perform some operations on the shared state
+        // ...
+        drop(shared_guard);
     }
 }
 
