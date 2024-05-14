@@ -218,7 +218,7 @@ impl<T> Debug for BusInner<T> {
 }
 
 /// `Bus` is the core data structure.
-struct Bus<T> {
+pub struct Bus<T> {
     /*-------------Core State Management-----------*/
     state: Arc<BusInner<T>>, // holds the inner state of the bus, including the data being transmitted.
 
@@ -232,6 +232,20 @@ struct Bus<T> {
     ), // used by receivers to signal when they're wating for new entries
     unpark: mpsc::Sender<thread::Thread>, // Send to unparker to wake up parking threads.
     cache: Vec<(thread::Thread, usize)>, // caching to keep track of threads waiting for the next write.
+}
+
+impl<T> fmt::Debug for Bus<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Bus")
+            .field("state", &self.state)
+            .field("readers", &self.readers)
+            .field("rleft", &self.rleft)
+            .field("leaving", &self.leaving)
+            .field("waiting", &self.waiting)
+            .field("unpark", &self.unpark)
+            .field("cache", &self.cache)
+            .finish()
+    }
 }
 
 impl<T> Bus<T> {
@@ -402,6 +416,14 @@ pub struct BusReader<T> {
     /*---------Signaling and Communication-------- */
     leaving: (mpsc::Sender<usize>),
     waiting: mpsc::Sender<(Thread, usize)>,
+}
+
+impl<T> BusReader<T> {
+    /// Returns an iterator that will block waiting for broadcasts. It will return `None` when the
+    /// bus has been closed (i.e., the `Bus` has been dropped).
+    pub fn iter(&mut self) -> BusIter<'_, T> {
+        BusIter(self)
+    }
 }
 
 impl<T> Debug for BusReader<T> {
