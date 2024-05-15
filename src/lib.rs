@@ -28,14 +28,18 @@ struct SeatState<T> {
 }
 
 impl<T> SeatState<T> {
+    /// for testing.
     pub fn new() -> Self {
         Self { max: 0, val: None }
     }
 }
 
+/// Using UnsafeCell to realize `interior mutability`
+/// which allows multiple `&mut T` to modify the data(SeatState).
 struct MutSeatState<T>(UnsafeCell<SeatState<T>>);
 
-/// 实现Sync trait，以安全地在多个线程间共享
+/// impl Sync trait for SeatState to safely shared(transfered) between threads.
+/// Why unsafe? cause we(developers) neet to ensure that the `T` is `Sync`.
 unsafe impl<T> Sync for MutSeatState<T> {}
 
 impl<T> Deref for MutSeatState<T> {
@@ -143,8 +147,11 @@ impl<T> AtomicOption<T> {
 
 /// A seat represents a single location in the circurlar buffer.
 struct Seat<T> {
+    // a reader count
     read: atomic::AtomicUsize,
+    // state wrapper
     state: MutSeatState<T>,
+    // is the writer waiting for this seat to be emptied?
     waiting: AtomicOption<thread::Thread>,
 }
 
@@ -163,12 +170,16 @@ impl<T> Default for Seat<T> {
         Seat {
             read: atomic::AtomicUsize::new(0),
             waiting: AtomicOption::empty(),
-            state: MutSeatState(UnsafeCell::new(SeatState { max: 0, val: None })),
+            state: MutSeatState(UnsafeCell::new(SeatState::new())),
         }
     }
 }
 
 impl<T: Clone + Sync> Seat<T> {
+    /// The take function is designed to safely and efficiently allow a reader to extract
+    /// a copy of the value stored in a Seat of a circular buffer.
+    /// The function ensures synchronization between multiple readers and
+    /// a writer to prevent data races and inconsistencies.
     fn take(&self) -> T {
         // read the state and validate the current readerCount.
         let read = self.read.load(atomic::Ordering::Acquire);
@@ -203,7 +214,7 @@ struct BusInner<T> {
     tail: atomic::AtomicUsize, // Indicate the index where the nxt write will occur.
 
     /*----State Management-----*/
-    closed: atomic::AtomicBool, // the state of the Bus.
+    closed: atomic::AtomicBool, // the state of the Bus, is it closed?
 }
 
 impl<T> Debug for BusInner<T> {
@@ -249,10 +260,11 @@ impl<T> fmt::Debug for Bus<T> {
 }
 
 impl<T> Bus<T> {
+    /// Allocates a new 'Bus'.
     pub fn new(mut len: usize) -> Bus<T> {
         use std::iter;
 
-        // Set Inner state, ring buffer must have room for one padding element.
+        // Set Inner state, ring buffer must have one room for one padding element.
         len += 1;
         let inner = Arc::new(BusInner {
             ring: (0..len).map(|_| Seat::default()).collect(),
@@ -351,6 +363,10 @@ impl<T> Bus<T> {
             // ensure they can accurately determine when they have consumed the value by the writer.
             next.read.store(0, atomic::Ordering::Release);
         }
+        // 5+. Update the state, now tell readers that they can read
+        self.rleft[tail] = 0;
+        let tail = (tail + 1) % self.state.len;
+        self.state.tail.store(tail, atomic::Ordering::Release);
         // 6. Unblocks waiting threads after Broadcast operation.
         while let Ok((t, at)) = self.waiting.1.try_recv() {
             if at == tail {
@@ -392,6 +408,9 @@ impl<T> Bus<T> {
         }
     }
 
+    /// Returns the number of active consumers currently attached to this bus.
+    /// It is not guaranteed that a sent message will reach this number of consumers, as active
+    /// consumers may never call `recv` or `try_recv` again before dropping.
     pub fn rx_count(&self) -> usize {
         self.readers - self.leaving.1.len()
     }
