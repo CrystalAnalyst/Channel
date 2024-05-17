@@ -308,7 +308,15 @@ impl<T> Bus<T> {
         adjusted_reads
     }
 
-    /* ---------------BroadCast Interface---------------- */
+    /* ---------------BroadCast(Writing) Interface---------------- */
+    /// Attempts to place the given value on the bus.
+    ///
+    /// If the bus is full, the behavior depends on `block`.
+    /// If false(Nonblocking), the value given is returned in an `Err()`.
+    /// Otherwise, the current thread will be parked until there is space in the bus.
+    /// again, and the broadcast will be tried again until it succeeds.
+    ///
+    /// Note that broadcasts will succeed even if there are no consumers!
     fn broadcast_inner(&mut self, val: T, block: bool) -> Result<(), T> {
         // 1. Initializatio and Set up
         let tail = self.state.tail.load(atomic::Ordering::Relaxed);
@@ -386,10 +394,13 @@ impl<T> Bus<T> {
         Ok(())
     }
 
+    /// NonBlocking Boardcast(allow the writer thread to fail)
     pub fn try_broadcast(&mut self, val: T) -> Result<(), T> {
         self.broadcast_inner(val, false)
     }
 
+    /// Blocking Boradcast(strongly ensures that the writer must finish the write(boardcast) Action
+    /// If it cannot do it, then panic.
     pub fn broadcast(&mut self, val: T) {
         if let Err(_) = self.broadcast_inner(val, true) {
             unreachable!("broadcast without Blocking Cannot Fail!");
@@ -464,6 +475,7 @@ pub enum RecvCondition {
     Timeout(time::Duration),
 }
 
+/// Readers method to extract value from the ring buffer.
 impl<T: Clone + Sync> BusReader<T> {
     fn recv_inner(&mut self, block: RecvCondition) -> Result<T, std_mpsc::RecvTimeoutError> {
         if self.closed {
@@ -480,6 +492,7 @@ impl<T: Clone + Sync> BusReader<T> {
         let mut first = true;
         loop {
             let tail = self.bus.tail.load(atomic::Ordering::Acquire);
+            // If not empty, then quit.
             if tail != self.head {
                 break;
             }
@@ -505,6 +518,9 @@ impl<T: Clone + Sync> BusReader<T> {
                 }
                 first = false;
             }
+            // Now, It's empty but I wanna read data from the ringBuffer,
+            // And I expect that it won't take too long so I don't wanna the thread to sleep
+            // then I figured out that SpinLock is a good choice here.
             if !sw.spin() {
                 match block {
                     RecvCondition::Timeout(t) => {
@@ -524,13 +540,16 @@ impl<T: Clone + Sync> BusReader<T> {
                 }
             }
         }
+        // There indeed exists available data and I can read it.
         let head = self.head;
         let ret = self.bus.ring[head].take();
         self.head = (head + 1) % self.bus.len;
+        // return the data I read.
         Ok(ret)
     }
 
     /// Non-blocking Interface for BusReader to receive a value
+    /// Means that if the ring is empty, I just return immediately.
     pub fn try_recv(&mut self) -> Result<T, std_mpsc::TryRecvError> {
         self.recv_inner(RecvCondition::Try).map_err(|e| match e {
             std_mpsc::RecvTimeoutError::Timeout => std_mpsc::TryRecvError::Empty,
@@ -539,6 +558,7 @@ impl<T: Clone + Sync> BusReader<T> {
     }
 
     /// Blocking Interface for BusReader to receive a value.
+    /// Blocking Means that if the ring is empty, I wait still until the writer newly write data.
     pub fn recv(&mut self) -> Result<T, std_mpsc::RecvError> {
         match self.recv_inner(RecvCondition::Block) {
             Ok(v) => return Ok(v),
@@ -548,6 +568,7 @@ impl<T: Clone + Sync> BusReader<T> {
     }
 
     /// Time bound receive.
+    /// If the data is not available now, I wait for a period of time.
     pub fn recv_timeout(
         &mut self,
         timeout: time::Duration,
