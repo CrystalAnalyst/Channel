@@ -3,7 +3,10 @@ extern crate channel;
 use std::sync::mpsc;
 use std::time;
 
+/* ----------------Basic Functionality:SPMC--------------------*/
 #[test]
+/// Tests basic functionality of
+/// broadcasting a message and receiving it with two receivers.
 fn it_works() {
     let mut c = channel::Bus::new(10);
     let mut r1 = c.add_rx();
@@ -14,6 +17,7 @@ fn it_works() {
 }
 
 #[test]
+/// Tests the Debug trait implementation for the Bus and a receiver.
 fn debug() {
     let mut c = channel::Bus::new(10);
     println!("{:?}", c);
@@ -27,6 +31,8 @@ fn debug() {
 }
 
 #[test]
+///  Similar to debug, but tests with a non-Debug type
+/// to ensure the outer structure can still be debug-printed.
 fn debug_not_inner() {
     // Foo does not implement Debug
     #[derive(Clone, Copy, PartialEq, Eq)]
@@ -43,7 +49,9 @@ fn debug_not_inner() {
     println!("{:?}", c);
 }
 
+/* ----------------Capacity Handling--------------------*/
 #[test]
+/// Ensures that broadcasting fails when the channel is full.
 fn it_fails_when_full() {
     let mut c = channel::Bus::new(1);
     let r1 = c.add_rx();
@@ -53,6 +61,7 @@ fn it_fails_when_full() {
 }
 
 #[test]
+/// Tests successful broadcasting after the channel has been emptied.
 fn it_succeeds_when_not_full() {
     let mut c = channel::Bus::new(1);
     let mut r1 = c.add_rx();
@@ -62,7 +71,9 @@ fn it_succeeds_when_not_full() {
     assert_eq!(c.try_broadcast(true), Ok(()));
 }
 
+/* ----------------Empty and Full States--------------------*/
 #[test]
+/// Ensures that attempting to receive from an empty channel results in an error.
 fn it_fails_when_empty() {
     let mut c = channel::Bus::<bool>::new(10);
     let mut r1 = c.add_rx();
@@ -70,6 +81,7 @@ fn it_fails_when_empty() {
 }
 
 #[test]
+/// Tests that a message can be successfully read from a full channel.
 fn it_reads_when_full() {
     let mut c = channel::Bus::new(1);
     let mut r1 = c.add_rx();
@@ -77,19 +89,25 @@ fn it_reads_when_full() {
     assert_eq!(r1.try_recv(), Ok(true));
 }
 
+/* ----------------Testing Iteration--------------------*/
 #[test]
 #[cfg_attr(miri, ignore)]
+/// Tests the iterator functionality of the receiver
+/// by broadcasting multiple messages and receiving them in sequence.
 fn it_iterates() {
     use std::thread;
 
     let mut tx = channel::Bus::new(2);
     let mut rx = tx.add_rx();
+
+    // broadcast multiple messages.
     let j = thread::spawn(move || {
         for i in 0..1_000 {
             tx.broadcast(i);
         }
     });
 
+    // receive them in sequence.
     let mut ii = 0;
     for i in rx.iter() {
         assert_eq!(i, ii);
@@ -103,6 +121,7 @@ fn it_iterates() {
 
 #[test]
 #[cfg_attr(miri, ignore)]
+///  Runs the iteration test multiple times to check for robustness under repeated stress.
 fn aggressive_iteration() {
     for _ in 0..1_000 {
         use std::thread;
@@ -127,7 +146,10 @@ fn aggressive_iteration() {
     }
 }
 
+/* ----------------Action after the channel closed--------------------*/
 #[test]
+///  Ensures that receivers can detect
+///  when the channel has been closed and no more messages will be sent.
 fn it_detects_closure() {
     let mut tx = channel::Bus::new(1);
     let mut rx = tx.add_rx();
@@ -139,6 +161,8 @@ fn it_detects_closure() {
 }
 
 #[test]
+/// Tests that messages sent before the channel is closed
+/// can still be received after closure.
 fn it_recvs_after_close() {
     let mut tx = channel::Bus::new(1);
     let mut rx = tx.add_rx();
@@ -148,7 +172,9 @@ fn it_recvs_after_close() {
     assert_eq!(rx.try_recv(), Err(mpsc::TryRecvError::Disconnected));
 }
 
+/* ----------------Receiver Management--------------------*/
 #[test]
+/// Ensures that the channel functions correctly when receivers are dropped (i.e., removed).
 fn it_handles_leaves() {
     let mut c = channel::Bus::new(1);
     let mut r1 = c.add_rx();
@@ -159,8 +185,11 @@ fn it_handles_leaves() {
     assert_eq!(c.try_broadcast(true), Ok(()));
 }
 
+/* --------------Blocking Behavior: writes & reads--------------------*/
 #[test]
 #[cfg_attr(miri, ignore)]
+/// Tests blocking behavior for writing when the channel is full,
+/// and unblocks the writer by reading a message.
 fn it_runs_blocked_writes() {
     use std::thread;
 
@@ -183,6 +212,8 @@ fn it_runs_blocked_writes() {
 
 #[test]
 #[cfg_attr(miri, ignore)]
+/// Tests blocking behavior for reading when the channel is empty,
+/// and unblocks the reader by broadcasting a message.
 fn it_runs_blocked_reads() {
     use std::sync::mpsc;
     use std::thread;
@@ -201,8 +232,11 @@ fn it_runs_blocked_reads() {
     c.join().unwrap();
 }
 
+/* --------------Stress Tesing && Benchmark--------------------*/
 #[test]
 #[cfg_attr(miri, ignore)]
+/// Ensures the channel can handle a high volume of messages (10,000)
+/// being sent and received correctly.
 fn it_can_count_to_10000() {
     use std::thread;
 
@@ -224,6 +258,8 @@ fn it_can_count_to_10000() {
 
 #[test]
 #[cfg_attr(miri, ignore)]
+/// Here I Simulate a more complex scenario with limited channel capacity and multiple receivers
+/// consuming different amounts of messages to test concurrency and blocking behavior.
 fn test_busy() {
     use std::thread;
 

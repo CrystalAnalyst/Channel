@@ -496,7 +496,7 @@ impl<T: Clone + Sync> BusReader<T> {
             if tail != self.head {
                 break;
             }
-            // Empty and closed.
+            // Empty and closed,
             if self.bus.closed.load(atomic::Ordering::Relaxed) {
                 if !was_closed {
                     was_closed = true;
