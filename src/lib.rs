@@ -85,13 +85,11 @@ mod tests {
 }
 
 struct AtomicOption<T> {
-    /// A raw pointer type which can be safely shared between threads.
-    /// This type has the same in-memory representation as a *mut T.
+    /// Allows for atomic operations on raw pointers(*mut T)
     ptr: atomic::AtomicPtr<T>,
-    /// Adding a PhantomData<T> field to your type tells the compiler
-    /// that your type acts as though it stores a value of type T,
-    /// even though it doesn't really.
-    /// This information is used when computing certain safety properties.
+    /// The PhantomData<Option<Box<T>>> marker
+    /// indicates that AtomicOption logically owns a Box<T>(a heap-allocated T),
+    /// although the actual storage is managed by the raw pointer.
     _marker: PhantomData<Option<Box<T>>>,
 }
 
@@ -103,6 +101,7 @@ impl<T> fmt::Debug for AtomicOption<T> {
     }
 }
 
+/// Ensures when an AtomicOption is dropped, any contained value is properly deallocated.
 impl<T> Drop for AtomicOption<T> {
     fn drop(&mut self) {
         drop(self.take());
@@ -115,7 +114,7 @@ unsafe impl<T: Send> Send for AtomicOption<T> {}
 unsafe impl<T: Sync> Sync for AtomicOption<T> {}
 
 impl<T> AtomicOption<T> {
-    /// create an empty instance of AtomicOption.
+    /// Initializes an AtomicOption with a null pointer, representing None.
     fn empty() -> Self {
         Self {
             ptr: atomic::AtomicPtr::new(ptr::null_mut()),
@@ -123,11 +122,9 @@ impl<T> AtomicOption<T> {
         }
     }
 
-    /// swaps the value stored in the `AtomicPtr<T>`
+    /// Swaps the value stored in the `AtomicPtr<T>`
     /// with a new value and returns the old value.
     fn swap(&self, val: Option<Box<T>>) -> Option<Box<T>> {
-        // If the val is Some(), swaps the boxed value into the ptr.
-        // If not(the val is None), swaps a null pointer into the ptr.
         let old = match val {
             Some(val) => self.ptr.swap(Box::into_raw(val), atomic::Ordering::AcqRel),
             None => self.ptr.swap(ptr::null_mut(), atomic::Ordering::Acquire),
@@ -139,8 +136,8 @@ impl<T> AtomicOption<T> {
         }
     }
 
-    /// swap with param:`None`, which means
-    /// just return the value stored in the AtomicPtr<T>.
+    /// Atomically replaces the current pointer
+    /// with a null pointer and returns the old value.
     fn take(&self) -> Option<Box<T>> {
         self.swap(None)
     }
@@ -174,14 +171,18 @@ impl<T> Default for Seat<T> {
 }
 
 impl<T: Clone + Sync> Seat<T> {
-    /// Allow a reader to extract "a copy of" the value stored in a Seat.
+    /// Allow a reader(`BusReader`) to extract "a copy of" the value stored in a Seat.
     fn take(&self) -> T {
         let read = self.read.load(atomic::Ordering::Acquire);
         let state = unsafe { &*self.state.get() };
         assert!(read < state.max, " the number of readers exceeds!");
         let mut waiting = None;
+        // If the current reader is the last reader (read + 1 == state.max),
+        // It'll retrieves the thread waiting for this Seat to become available again,
+        // if any, and unparks it.
         let v = if read + 1 == state.max {
             waiting = self.waiting.take();
+            // remove the value for the last reader.
             unsafe { &mut *self.state.get() }.val.take().unwrap()
         } else {
             let v = state.val.clone().expect("there should be value but not!");
@@ -337,6 +338,9 @@ impl<T> Bus<T> {
                 break;
             } else if block {
                 // Registers the current thread in the waiting field so it can be unparked later.
+                //
+                // [Timing]: When a reader consumes an item from the buffer,
+                // it might check the waiting field and unpark any waiting writer, allowing it to continue.
                 self.state.ring[fence]
                     .waiting
                     .swap(Some(Box::new(thread::current())));
