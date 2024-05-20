@@ -38,7 +38,7 @@ impl<T> SeatState<T> {
 /// which allows multiple `&mut T` to modify the data(SeatState).
 struct MutSeatState<T>(UnsafeCell<SeatState<T>>);
 
-/// impl Sync trait for SeatState to safely shared(transfered) between threads.
+/// impl Sync trait for SeatState to safely shared between threads.
 /// Why unsafe? cause we(developers) neet to ensure that the `T` is `Sync`.
 unsafe impl<T> Sync for MutSeatState<T> {}
 
@@ -126,7 +126,7 @@ impl<T> AtomicOption<T> {
     /// with a new value and returns the old value.
     fn swap(&self, val: Option<Box<T>>) -> Option<Box<T>> {
         // If the val is Some(), swaps the boxed value into the ptr.
-        // else, swaps a null pointer into the ptr.
+        // If not(the val is None), swaps a null pointer into the ptr.
         let old = match val {
             Some(val) => self.ptr.swap(Box::into_raw(val), atomic::Ordering::AcqRel),
             None => self.ptr.swap(ptr::null_mut(), atomic::Ordering::Acquire),
@@ -147,10 +147,10 @@ impl<T> AtomicOption<T> {
 
 /// A seat represents a single location in the circurlar buffer.
 struct Seat<T> {
-    // a reader count
-    read: atomic::AtomicUsize,
     // state wrapper
     state: MutSeatState<T>,
+    // a reader count
+    read: atomic::AtomicUsize,
     // is the writer waiting for this seat to be emptied?
     waiting: AtomicOption<thread::Thread>,
 }
@@ -168,16 +168,16 @@ impl<T> fmt::Debug for Seat<T> {
 impl<T> Default for Seat<T> {
     fn default() -> Self {
         Seat {
+            state: MutSeatState(UnsafeCell::new(SeatState::new())),
             read: atomic::AtomicUsize::new(0),
             waiting: AtomicOption::empty(),
-            state: MutSeatState(UnsafeCell::new(SeatState::new())),
         }
     }
 }
 
 impl<T: Clone + Sync> Seat<T> {
     /// The take function is designed to safely and efficiently allow a reader to extract
-    /// a copy of the value stored in a Seat of a circular buffer.
+    /// "a copy of" the value stored in a Seat of a circular buffer.
     /// The function ensures synchronization between multiple readers and
     /// a writer to prevent data races and inconsistencies.
     fn take(&self) -> T {
@@ -231,17 +231,19 @@ impl<T> Debug for BusInner<T> {
 /// `Bus` is the core data structure.
 pub struct Bus<T> {
     /*-------------Core State Management-----------*/
-    state: Arc<BusInner<T>>, // holds the inner state of the bus, including the data being transmitted.
+    state: Arc<BusInner<T>>, // holds the inner state of the bus.
 
     /*-------------Reader Management---------------*/
     readers: usize,    // Number of current Active readers.
-    rleft: Vec<usize>, // tracks readers that should be skipped for each index.
-    leaving: (mpsc::Sender<usize>, mpsc::Receiver<usize>), // used by receivers to signal when they are done.
+    rleft: Vec<usize>, // tracks readers that should be skipped for each index ??? why they should be skipped?
+
+    /*-------------Signal channels-----------------*/
     waiting: (
         mpsc::Sender<(thread::Thread, usize)>,
         mpsc::Receiver<(thread::Thread, usize)>,
-    ), // used by receivers to signal when they're wating for new entries
-    unpark: mpsc::Sender<thread::Thread>, // Send to unparker to wake up parking threads.
+    ), // used by receivers(readers) to signal when they're wating for new messages.
+    leaving: (mpsc::Sender<usize>, mpsc::Receiver<usize>), // used by readers to signal when they are done.
+    unpark: mpsc::Sender<thread::Thread>, // Send to unparker to wake up parking threads. ??? why parked ?
     cache: Vec<(thread::Thread, usize)>, // caching to keep track of threads waiting for the next write.
 }
 
@@ -260,7 +262,8 @@ impl<T> fmt::Debug for Bus<T> {
 }
 
 impl<T> Bus<T> {
-    /// Allocates a new 'Bus'.
+    /// Allocates a new 'Bus'
+    /// @ param: len, you can customize the capacity of Ringbuffer.
     pub fn new(mut len: usize) -> Bus<T> {
         use std::iter;
 
@@ -360,22 +363,22 @@ impl<T> Bus<T> {
         // 5. Writing to the Bus
         let readers = self.readers;
         {
+            // Look with your big Eyes: here I write the data to ring[tail].
             let next = &self.state.ring[tail];
             let state = unsafe { &mut *next.state.get() };
             state.max = readers;
             state.val = Some(val);
-            // here are the new value, so clean the `waiting` field of the `next` seat,
-            // ensures that any parked threads with the seat are unblocked.
+            // Write Done. Now clean the `waiting` field of this seat,
+            // meaning that the parking writer thread can be unparked.
             next.waiting.take();
             // resets the `read` counter of the `next` to 0.
-            // ensure they can accurately determine when they have consumed the value by the writer.
             next.read.store(0, atomic::Ordering::Release);
         }
-        // 5+. Update the state, now tell readers that they can read
         self.rleft[tail] = 0;
+        // move the tail pointer to the next one.
         let tail = (tail + 1) % self.state.len;
         self.state.tail.store(tail, atomic::Ordering::Release);
-        // 6. Unblocks waiting threads after Broadcast operation.
+        // 6. Unblocks waiting threads after Broadcast(Writing) operation.
         while let Ok((t, at)) = self.waiting.1.try_recv() {
             if at == tail {
                 // threads waiting for the current tail index are being added to a chche.
@@ -399,7 +402,7 @@ impl<T> Bus<T> {
         self.broadcast_inner(val, false)
     }
 
-    /// Blocking Boradcast(strongly ensures that the writer must finish the write(boardcast) Action
+    /// Blocking Boradcast(strongly) ensures that the writer must finish the write(boardcast) Action
     /// If it cannot do it, then panic.
     pub fn broadcast(&mut self, val: T) {
         if let Err(_) = self.broadcast_inner(val, true) {
@@ -478,10 +481,12 @@ pub enum RecvCondition {
 /// Readers method to extract value from the ring buffer.
 impl<T: Clone + Sync> BusReader<T> {
     fn recv_inner(&mut self, block: RecvCondition) -> Result<T, std_mpsc::RecvTimeoutError> {
+        // Status check
         if self.closed {
             return Err(std_mpsc::RecvTimeoutError::Disconnected);
         }
 
+        // variable declaration: mainly time-related.
         let start = match block {
             RecvCondition::Timeout(_) => Some(Instant::now()),
             _ => None,
@@ -490,13 +495,27 @@ impl<T: Clone + Sync> BusReader<T> {
         let mut was_closed = false;
         let mut sw = SpinWait::new();
         let mut first = true;
+
+        // Before we do the action, check the bus's state.
+        /*
+           Check by the following Order
+               1. Empty or not ? If not empty, just Exit the loop.
+               2. If it's empty, whether it's closed or not ?
+               3. If it is closed, then return the Err(Disconnected)
+               4. If it's not closed, But it's empty, should the reader thread block ?
+               5. If it's non-blocking, that is RecvCondition::Try => We return directly.
+               6. If it's Block, means that the reader thread will wait the writer thread to place value.
+                  Now we need use channel to send to the writer that I(thread::current()) am waiting at self.head
+               7.
+
+        */
         loop {
             let tail = self.bus.tail.load(atomic::Ordering::Acquire);
             // If not empty, then quit.
             if tail != self.head {
                 break;
             }
-            // Empty and closed,
+            // check closed or not ?
             if self.bus.closed.load(atomic::Ordering::Relaxed) {
                 if !was_closed {
                     was_closed = true;
@@ -505,11 +524,11 @@ impl<T: Clone + Sync> BusReader<T> {
                 self.closed = true;
                 return Err(std_mpsc::RecvTimeoutError::Disconnected);
             }
-            // Empty but not closed (if nonblocking return Timeout).
+            // Not closed, if nonblocking => return Timeout.
             if let RecvCondition::Try = block {
                 return Err(std_mpsc::RecvTimeoutError::Timeout);
             }
-            // Empty but not closed, and Blocking (wait until there's data to read)
+            // Blocking (wait until there's data being placed by writer).
             // park and tell writer to notify on write.
             if first {
                 if let Err(..) = self.waiting.send((thread::current(), self.head)) {
@@ -540,11 +559,11 @@ impl<T: Clone + Sync> BusReader<T> {
                 }
             }
         }
+
         // There indeed exists available data and I can read it.
         let head = self.head;
         let ret = self.bus.ring[head].take();
         self.head = (head + 1) % self.bus.len;
-        // return the data I read.
         Ok(ret)
     }
 
@@ -577,41 +596,62 @@ impl<T: Clone + Sync> BusReader<T> {
     }
 }
 
+/// The method sends the current head position to a channel (self.leaving).
+///
+/// Bus is notified when a reader is no longer active,
+/// helping manage resources and possibly maintaining the correct state of the bus.
+///
 impl<T> Drop for BusReader<T> {
     fn drop(&mut self) {
         self.leaving.send(self.head);
     }
 }
 
+/// The Following Iterator implementations (BusIter and BusIntoIter) provide
+/// a convenient way to consume the bus’s values in a loop, using standard iterator methods like next.
+///
+
+/// `IntoIterator` allows BusReader to be converted into an iterator.
 impl<'a, T: Clone + Sync> IntoIterator for &'a mut BusReader<T> {
     type Item = T;
     type IntoIter = BusIter<'a, T>;
+    /// The into_iter method converts self into a BusIter.
     fn into_iter(self) -> Self::IntoIter {
         BusIter(self)
     }
 }
 
+/// for owning BusReader<T> (not a reference).
 impl<T: Clone + Sync> IntoIterator for BusReader<T> {
     type Item = T;
     type IntoIter = BusIntoIter<T>;
+    /// The into_iter method converts self into a BusIntoIter.
     fn into_iter(self) -> Self::IntoIter {
         BusIntoIter(self)
     }
 }
 
+/// BusIter is a struct that holds a mutable reference to a BusReader.
 pub struct BusIter<'a, T>(&'a mut BusReader<T>);
 
+/// The Iterator trait implementation for BusIter allows it to yield items of type T.
 impl<'a, T: Clone + Sync> Iterator for BusIter<'a, T> {
     type Item = T;
+    /// The next method attempts to receive a value from the BusReader by calling recv.
+    /// If successful, it returns Some(item); otherwise, it returns None.
     fn next(&mut self) -> Option<Self::Item> {
         self.0.recv().ok()
     }
 }
 
+/// BusIntoIter is a struct that holds ownership of a BusReader.
 pub struct BusIntoIter<T>(BusReader<T>);
 
+/// The Iterator trait implementation for BusIntoIter allows it to yield items of type T.
 impl<T: Clone + Sync> Iterator for BusIntoIter<T> {
     type Item = T;
+    /// Similar to BusIter, the next method attempts to receive a value
+    /// from the BusReader and returns Some(item) if successful or None otherwise.
     fn next(&mut self) -> Option<Self::Item> {
         self.0.recv().ok()
     }
