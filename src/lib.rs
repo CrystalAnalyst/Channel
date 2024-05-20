@@ -5,6 +5,7 @@
 use core::time;
 use crossbeam_channel as mpsc;
 use mpsc::RecvTimeoutError;
+use mpsc::{Receiver, Sender};
 use parking_lot_core::SpinWait;
 use std::f32::MIN_EXP;
 use std::ops::Deref;
@@ -147,12 +148,9 @@ impl<T> AtomicOption<T> {
 
 /// A seat represents a single location in the circurlar buffer.
 struct Seat<T> {
-    // state wrapper
     state: MutSeatState<T>,
-    // a reader count
     read: atomic::AtomicUsize,
-    // is the writer waiting for this seat to be emptied?
-    waiting: AtomicOption<thread::Thread>,
+    waiting: AtomicOption<Thread>,
 }
 
 impl<T> fmt::Debug for Seat<T> {
@@ -206,15 +204,10 @@ impl<T: Clone + Sync> Seat<T> {
 
 /// `BusInner` encapsulates data, which can be accessed by both the writers and readers.
 struct BusInner<T> {
-    /*------Ring buffer--------*/
     ring: Vec<Seat<T>>,
     len: usize,
-
-    /*-----Pos Tracking--------*/
-    tail: atomic::AtomicUsize, // Indicate the index where the nxt write will occur.
-
-    /*----State Management-----*/
-    closed: atomic::AtomicBool, // the state of the Bus, is it closed?
+    tail: atomic::AtomicUsize,
+    closed: atomic::AtomicBool,
 }
 
 impl<T> Debug for BusInner<T> {
@@ -230,21 +223,30 @@ impl<T> Debug for BusInner<T> {
 
 /// `Bus` is the core data structure.
 pub struct Bus<T> {
-    /*-------------Core State Management-----------*/
-    state: Arc<BusInner<T>>, // holds the inner state of the bus.
-
-    /*-------------Reader Management---------------*/
-    readers: usize,    // Number of current Active readers.
-    rleft: Vec<usize>, // tracks readers that should be skipped for each index ??? why they should be skipped?
-
-    /*-------------Signal channels-----------------*/
-    waiting: (
-        mpsc::Sender<(thread::Thread, usize)>,
-        mpsc::Receiver<(thread::Thread, usize)>,
-    ), // used by receivers(readers) to signal when they're wating for new messages.
-    leaving: (mpsc::Sender<usize>, mpsc::Receiver<usize>), // used by readers to signal when they are done.
-    unpark: mpsc::Sender<thread::Thread>, // Send to unparker to wake up parking threads. ??? why parked ?
-    cache: Vec<(thread::Thread, usize)>, // caching to keep track of threads waiting for the next write.
+    /// holds the inner state of the bus.
+    state: Arc<BusInner<T>>,
+    ///
+    /// Number of current Active readers.
+    readers: usize,
+    ///
+    /// Tracks incomplete reads for each slot in the ring buffer.
+    rleft: Vec<usize>,
+    ///
+    /// An unbounded channel for readers that are waiting for new broadcasts.
+    waiting: (Sender<(Thread, usize)>, Receiver<(Thread, usize)>),
+    ///
+    /// An unbounded channel for readers that are leaving, to signal their positions.
+    leaving: (Sender<usize>, Receiver<usize>),
+    ///
+    /// This `unpark` is designed to handle this situation:
+    /// when a `BusReader` wanna read data at a specific place, but there's no data.
+    /// At this time it'll block himself(using thread::park()) and waits for writer to write data,
+    /// and when the data is available, the `bus` unpark all the reader threads that has been parked.
+    /// This enables the bus to wake up waiting readers when new data is available or when the bus is closing.
+    unpark: Sender<Thread>,
+    /// Temporarily stores threads(waiting for the next write) that need to be unparked.
+    /// This helps in managing and batching thread wake-ups efficiently.
+    cache: Vec<(Thread, usize)>,
 }
 
 impl<T> fmt::Debug for Bus<T> {
@@ -267,7 +269,6 @@ impl<T> Bus<T> {
     pub fn new(mut len: usize) -> Bus<T> {
         use std::iter;
 
-        // Set Inner state, ring buffer must have one room for one padding element.
         len += 1;
         let inner = Arc::new(BusInner {
             ring: (0..len).map(|_| Seat::default()).collect(),
@@ -276,19 +277,15 @@ impl<T> Bus<T> {
             len,
         });
 
-        // unparking threads Asynchrounously.
-        let (unpark_tx, unpark_rx) = mpsc::unbounded::<thread::Thread>();
+        let (unpark_tx, unpark_rx) = mpsc::unbounded::<Thread>();
         let _ = thread::Builder::new()
             .name("bus_unparking".to_owned())
             .spawn(move || {
-                // listens for unpark requests on the receiver channel (unpark_rx)
-                // and unparks the corresponding threads
                 for t in unpark_rx.iter() {
                     t.unpark();
                 }
             });
 
-        // return the Assembling of all the components.
         Bus {
             state: inner,
             readers: 0,
@@ -332,7 +329,6 @@ impl<T> Bus<T> {
             if fence_read == self.expect(fence) {
                 break;
             }
-
             while let Ok(mut left) = self.leaving.1.try_recv() {
                 self.readers -= 1;
                 while left != tail {
@@ -340,11 +336,9 @@ impl<T> Bus<T> {
                     left = (left + 1) % self.state.len;
                 }
             }
-
             if fence_read == self.expect(fence) {
                 break;
             } else if block {
-                // 3. Handle Blocking
                 self.state.ring[fence]
                     .waiting
                     .swap(Some(Box::new(thread::current())));
@@ -356,14 +350,12 @@ impl<T> Bus<T> {
                 }
                 continue;
             } else {
-                // 4. Error Handling
                 return Err(val);
             }
         }
-        // 5. Writing to the Bus
+        // Writing to the Bus
         let readers = self.readers;
         {
-            // Look with your big Eyes: here I write the data to ring[tail].
             let next = &self.state.ring[tail];
             let state = unsafe { &mut *next.state.get() };
             state.max = readers;
@@ -438,6 +430,9 @@ impl<T> Drop for Bus<T> {
 }
 
 /// a receiver of messages from the bus.
+/// Using crossbeam-channel to Solve 2 Problems:
+///     1. When reader wanna read data at its `head` pos but there's no data available yet => waiting.
+///     2. When reader finish its read, It will leave, we got to tell the bus. => leaving.
 pub struct BusReader<T> {
     /*-------------Core State Management-----------*/
     bus: Arc<BusInner<T>>, // holds a reference to the inner state of the bus that the reader is reading from.
@@ -447,13 +442,19 @@ pub struct BusReader<T> {
     closed: bool, // indicates whether the reader has been closed.
 
     /*---------Signaling and Communication-------- */
-    leaving: (mpsc::Sender<usize>),
-    waiting: mpsc::Sender<(Thread, usize)>,
+    ///
+    /// When a reader extracts a value at ring[head], it will leave.
+    /// using leaving to send leaving message to the Bus to infrom.
+    leaving: Sender<usize>,
+    ///
+    /// When a reader intend to read a value from ring[head] but there's no data,
+    /// using waiting to send "I'm ThreadXXX, I'm waiting at `head` pos" to bus(writer) to inform.
+    waiting: Sender<(Thread, usize)>,
 }
 
 impl<T> BusReader<T> {
-    /// Returns an iterator that will block waiting for broadcasts. It will return `None` when the
-    /// bus has been closed (i.e., the `Bus` has been dropped).
+    /// Returns an iterator that will block waiting for broadcasts.
+    /// It will return `None` when the bus has been closed (i.e., the `Bus` has been dropped).
     pub fn iter(&mut self) -> BusIter<'_, T> {
         BusIter(self)
     }
@@ -506,8 +507,6 @@ impl<T: Clone + Sync> BusReader<T> {
                5. If it's non-blocking, that is RecvCondition::Try => We return directly.
                6. If it's Block, means that the reader thread will wait the writer thread to place value.
                   Now we need use channel to send to the writer that I(thread::current()) am waiting at self.head
-               7.
-
         */
         loop {
             let tail = self.bus.tail.load(atomic::Ordering::Acquire);
@@ -532,14 +531,22 @@ impl<T: Clone + Sync> BusReader<T> {
             // park and tell writer to notify on write.
             if first {
                 if let Err(..) = self.waiting.send((thread::current(), self.head)) {
+                    /// Atomic operations with Release or Acquire semantics can also synchronize with a fence.
+                    /// A fence which has SeqCst ordering, in addition to having both Acquire and Release semantics,
+                    /// participates in the global program order of the other SeqCst operations and/or fences.
                     atomic::fence(atomic::Ordering::SeqCst);
                     continue;
                 }
                 first = false;
             }
-            // Now, It's empty but I wanna read data from the ringBuffer,
+            // Now, It's empty but I wanna read data from the ringBuffer(bus),
             // And I expect that it won't take too long so I don't wanna the thread to sleep
             // then I figured out that SpinLock is a good choice here.
+
+            // The `spin` method of `SpinWait` returns `true` if the spinning should continue and `false` if it should stop.
+            // Typically, it spins for a few iterations and then decides that it's better to yield the thread to avoid wasting CPU cycles.
+            // In this context, `if !sw.spin()` checks if the spinning should stop.
+            // If it returns `false`, it means the spinning is complete and the thread should now be parked or yield.
             if !sw.spin() {
                 match block {
                     RecvCondition::Timeout(t) => {
@@ -595,6 +602,8 @@ impl<T: Clone + Sync> BusReader<T> {
         self.recv_inner(RecvCondition::Timeout(timeout))
     }
 }
+
+/* -----------------------------Impl Traits: Drop and Iterator(Into and &mut) for BusReader<T>----------------------- */
 
 /// The method sends the current head position to a channel (self.leaving).
 ///
