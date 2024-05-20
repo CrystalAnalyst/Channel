@@ -174,16 +174,11 @@ impl<T> Default for Seat<T> {
 }
 
 impl<T: Clone + Sync> Seat<T> {
-    /// The take function is designed to safely and efficiently allow a reader to extract
-    /// "a copy of" the value stored in a Seat of a circular buffer.
-    /// The function ensures synchronization between multiple readers and
-    /// a writer to prevent data races and inconsistencies.
+    /// Allow a reader to extract "a copy of" the value stored in a Seat.
     fn take(&self) -> T {
-        // read the state and validate the current readerCount.
         let read = self.read.load(atomic::Ordering::Acquire);
         let state = unsafe { &*self.state.get() };
         assert!(read < state.max, " the number of readers exceeds!");
-        // value extraction and notification(to the writers)
         let mut waiting = None;
         let v = if read + 1 == state.max {
             waiting = self.waiting.take();
@@ -193,7 +188,6 @@ impl<T: Clone + Sync> Seat<T> {
             drop(state);
             v
         };
-        // increment the count and writer notify
         self.read.fetch_add(1, atomic::Ordering::AcqRel);
         if let Some(t) = waiting {
             t.unpark();
@@ -229,7 +223,7 @@ pub struct Bus<T> {
     /// Number of current Active readers.
     readers: usize,
     ///
-    /// Tracks incomplete reads for each slot in the ring buffer.
+    /// Tracks numbers of read miss(readers leave before they actually read) for each slot in the ring buffer.
     rleft: Vec<usize>,
     ///
     /// An unbounded channel for readers that are waiting for new broadcasts.
@@ -244,7 +238,7 @@ pub struct Bus<T> {
     /// and when the data is available, the `bus` unpark all the reader threads that has been parked.
     /// This enables the bus to wake up waiting readers when new data is available or when the bus is closing.
     unpark: Sender<Thread>,
-    /// Temporarily stores threads(waiting for the next write) that need to be unparked.
+    /// Temporarily stores reader threads(waiting for the next write) that need to be unparked.
     /// This helps in managing and batching thread wake-ups efficiently.
     cache: Vec<(Thread, usize)>,
 }
@@ -279,7 +273,7 @@ impl<T> Bus<T> {
 
         let (unpark_tx, unpark_rx) = mpsc::unbounded::<Thread>();
         let _ = thread::Builder::new()
-            .name("bus_unparking".to_owned())
+            .name("unparking_thread".to_owned())
             .spawn(move || {
                 for t in unpark_rx.iter() {
                     t.unpark();
@@ -297,7 +291,10 @@ impl<T> Bus<T> {
         }
     }
 
-    /// get the expected number of reads for the given seat(at)
+    /// The `expect()` method returns the adjusted read count,
+    /// which is the expected number of reads for the given position after considering the missed reads.
+    /// when `expect(at)` == `ring[at].read` => the `Seat(ring[at])` is free,
+    /// and can be written with new value by writer(by broadcast).
     #[inline]
     fn expect(&mut self, at: usize) -> usize {
         // get the Max number of expected reads for given seat.
@@ -318,33 +315,37 @@ impl<T> Bus<T> {
     ///
     /// Note that broadcasts will succeed even if there are no consumers!
     fn broadcast_inner(&mut self, val: T, block: bool) -> Result<(), T> {
-        // 1. Initializatio and Set up
         let tail = self.state.tail.load(atomic::Ordering::Relaxed);
         let fence = (tail + 1) % self.state.len;
         let spintime = time::Duration::new(0, SPINTIME);
         let mut sw = SpinWait::new();
-        // 2. Main Loop for preparing the necessity before writing.
+        // check if there is space to write(in case the writer overwrite Unread data)
+        // and Updating the state when readers leave.
         loop {
             let fence_read = self.state.ring[fence].read.load(atomic::Ordering::Acquire);
             if fence_read == self.expect(fence) {
                 break;
             }
-            while let Ok(mut left) = self.leaving.1.try_recv() {
+            while let Ok(mut left_at) = self.leaving.1.try_recv() {
                 self.readers -= 1;
-                while left != tail {
-                    self.rleft[left] += 1;
-                    left = (left + 1) % self.state.len;
+                while left_at != tail {
+                    self.rleft[left_at] += 1;
+                    left_at = (left_at + 1) % self.state.len;
                 }
             }
             if fence_read == self.expect(fence) {
                 break;
             } else if block {
+                // Registers the current thread in the waiting field so it can be unparked later.
                 self.state.ring[fence]
                     .waiting
                     .swap(Some(Box::new(thread::current())));
+                // Ensures memory visibility of the above changes.
                 self.state.ring[fence]
                     .read
                     .fetch_add(0, atomic::Ordering::Release);
+                // The spin method is used to avoid immediately parking the thread if the position might become free soon.
+                // [optimization]: To avoid the overhead of parking and unparking if a slot is likely to be freed quickly.
                 if !sw.spin() {
                     thread::park_timeout(spintime);
                 }
@@ -361,7 +362,7 @@ impl<T> Bus<T> {
             state.max = readers;
             state.val = Some(val);
             // Write Done. Now clean the `waiting` field of this seat,
-            // meaning that the parking writer thread can be unparked.
+            // meaning that the parked writer thread can be unparked.
             next.waiting.take();
             // resets the `read` counter of the `next` to 0.
             next.read.store(0, atomic::Ordering::Release);
@@ -370,7 +371,10 @@ impl<T> Bus<T> {
         // move the tail pointer to the next one.
         let tail = (tail + 1) % self.state.len;
         self.state.tail.store(tail, atomic::Ordering::Release);
-        // 6. Unblocks waiting threads after Broadcast(Writing) operation.
+        // 6. Unblocks waiting reader threads after Broadcast(Writing) operation.
+        // here, we got t and at:
+        //       t:  represents Thread that's waiting
+        //       at: represents its waiting position in the ring.
         while let Ok((t, at)) = self.waiting.1.try_recv() {
             if at == tail {
                 // threads waiting for the current tail index are being added to a chche.
