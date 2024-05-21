@@ -51,7 +51,7 @@ fn debug_not_inner() {
 
 /* ----------------Capacity Handling--------------------*/
 #[test]
-/// Ensures that broadcasting fails when the channel is full.
+/// Nonblocking: Ensures that broadcasting fails when the channel is full.
 fn it_fails_when_full() {
     let mut c = channel::Bus::new(1);
     let r1 = c.add_rx();

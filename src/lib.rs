@@ -390,6 +390,7 @@ impl<T> Bus<T> {
             }
         }
         // all waiting threads are notified accordingly.
+        // .drain(..) acts full range clears the vector, like `clear()` does
         for w in self.cache.drain(..) {
             self.waiting.0.send(w).unwrap();
         }
