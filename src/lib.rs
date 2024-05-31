@@ -451,8 +451,6 @@ pub struct BusReader<T> {
     closed: bool, // indicates whether the reader has been closed.
 
     /*---------Signaling and Communication-------- */
-    ///
-    /// When a reader extracts a value at ring[head], it will leave.
     /// using leaving to send leaving message to the Bus to infrom.
     leaving: Sender<usize>,
     ///
